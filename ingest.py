@@ -8,6 +8,7 @@ import os
 import chromadb
 from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
+from hybrid_search import build_bm25_index, save_bm25_index
 
 load_dotenv()
 
@@ -133,6 +134,11 @@ def ingest_documents():
         ids=all_ids,
         metadatas=all_metadatas,
     )
+
+    # BM25 인덱스 빌드 및 저장
+    print("\nBM25 인덱스 생성 중...")
+    bm25_data = build_bm25_index(all_documents, all_metadatas, all_ids)
+    save_bm25_index(bm25_data)
 
     print(f"\n완료! {len(all_documents)}개 청크가 '{CHROMA_PATH}'에 저장되었습니다.")
     print("이제 query.py로 질문할 수 있습니다.\n")

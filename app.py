@@ -9,6 +9,7 @@ import chromadb
 from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
 from ingest import CHUNK_SIZE, CHUNK_OVERLAP
+from hybrid_search import load_bm25_index, hybrid_search
 
 load_dotenv()
 
@@ -55,14 +56,24 @@ def get_collection():
     return client.get_collection(name=COLLECTION_NAME, embedding_function=ef)
 
 
-def search_documents(query: str) -> tuple[list[str], list[dict], list[float]]:
+@st.cache_resource(show_spinner=False)
+def get_bm25_data():
+    return load_bm25_index()
+
+
+def search_documents(query: str, use_hybrid: bool = False) -> tuple[list[str], list[dict], list[float]]:
     collection = get_collection()
+    if use_hybrid:
+        bm25_data = get_bm25_data()
+        if bm25_data is not None:
+            return hybrid_search(query, collection, bm25_data, top_k=TOP_K)
     results = collection.query(
         query_texts=[query],
         n_results=TOP_K,
         include=["documents", "metadatas", "distances"],
     )
-    return results["documents"][0], results["metadatas"][0], results["distances"][0]
+    scores = [1.0 - d for d in results["distances"][0]]
+    return results["documents"][0], results["metadatas"][0], scores
 
 
 def ask_claude(question: str, chunks: list[str], metadatas: list[dict]):
@@ -92,13 +103,27 @@ def ask_claude(question: str, chunks: list[str], metadatas: list[dict]):
             yield text
 
 
-# 앱 시작 시 모델 로딩 (최초 1회)
+# 앱 시작 시 모델 및 BM25 인덱스 로딩 (최초 1회)
 with st.spinner("모델 로딩 중..."):
     get_collection()
+    get_bm25_data()
 st.success("임베딩 모델 로딩 완료 (nlpai-lab/KURE-v1)", icon="✅")
 
-# 사이드바 — 문서 청크 현황
+# 사이드바 — 검색 모드 토글 + 문서 청크 현황
 with st.sidebar:
+    st.header("검색 설정")
+    bm25_ready = get_bm25_data() is not None
+    use_hybrid = st.toggle(
+        "하이브리드 검색 (벡터 + BM25)",
+        value=False,
+        disabled=not bm25_ready,
+        help="비활성: ingest.py를 먼저 실행해 BM25 인덱스를 생성하세요." if not bm25_ready else "벡터 70% + BM25 키워드 30%",
+    )
+    if use_hybrid:
+        st.caption("벡터 70% + BM25 30%")
+    else:
+        st.caption("벡터 검색 100%")
+    st.divider()
     st.header("문서 현황")
     collection = get_collection()
     result = collection.get(include=["metadatas", "documents"])
@@ -146,12 +171,12 @@ if question := st.chat_input("질문을 입력하세요..."):
     with st.chat_message("assistant"):
         with st.spinner("문서 검색 중..."):
             try:
-                chunks, metadatas, distances = search_documents(question)
+                chunks, metadatas, distances = search_documents(question, use_hybrid=use_hybrid)
                 sources = [
                     {
                         "source": m["source"],
                         "chunk_index": m["chunk_index"],
-                        "similarity": 1 - d,
+                        "similarity": d,
                         "content": chunk,
                     }
                     for chunk, m, d in zip(chunks, metadatas, distances)

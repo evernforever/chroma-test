@@ -11,6 +11,7 @@ import anthropic
 import chromadb
 from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
+from hybrid_search import load_bm25_index, hybrid_search
 
 # Windows 터미널 UTF-8 인코딩 강제 설정
 if sys.stdout.encoding != "utf-8":
@@ -38,13 +39,23 @@ def load_collection():
         sys.exit(1)
 
 
-def search_documents(collection, query: str, top_k: int = TOP_K):
-    """ChromaDB에서 질문과 가장 유사한 청크를 검색."""
-    return collection.query(
+def search_documents(collection, query: str, top_k: int = TOP_K, use_hybrid: bool = False):
+    """벡터 검색 또는 하이브리드 검색 (벡터 70% + BM25 30%)."""
+    if use_hybrid:
+        bm25_data = load_bm25_index()
+        if bm25_data is not None:
+            texts, metas, scores = hybrid_search(query, collection, bm25_data, top_k=top_k)
+            return {"documents": [texts], "metadatas": [metas], "scores": [scores]}
+    results = collection.query(
         query_texts=[query],
         n_results=top_k,
         include=["documents", "metadatas", "distances"],
     )
+    return {
+        "documents": results["documents"],
+        "metadatas": results["metadatas"],
+        "scores": [[1.0 - d for d in results["distances"][0]]],
+    }
 
 
 def build_context(chunks: list[str], metadatas: list[dict]) -> str:
@@ -85,24 +96,26 @@ def ask_claude_stream(question: str, context: str):
     return "".join(full_answer)
 
 
-def run_query(collection, question: str):
+def run_query(collection, question: str, use_hybrid: bool = False):
     import time
 
     print(f"\n질문: {question}")
     print("\n검색 중...")
 
+    mode_label = "하이브리드 (벡터 70% + BM25 30%)" if use_hybrid else "벡터 100%"
+    print(f"검색 모드: {mode_label}")
+
     t0 = time.time()
-    results = search_documents(collection, question)
+    results = search_documents(collection, question, use_hybrid=use_hybrid)
     search_elapsed = time.time() - t0
 
     chunks = results["documents"][0]
     metadatas = results["metadatas"][0]
-    distances = results["distances"][0]
+    scores = results["scores"][0]
 
-    print(f"\n관련 문서 {len(chunks)}개 발견: (ChromaDB 검색 소요시간: {search_elapsed:.3f}s)")
-    for i, (meta, dist) in enumerate(zip(metadatas, distances), 1):
-        similarity = 1 - dist  # cosine distance → similarity
-        print(f"  {i}. {meta['source']} (청크 #{meta['chunk_index']}, 유사도: {similarity:.3f})")
+    print(f"\n관련 문서 {len(chunks)}개 발견: (검색 소요시간: {search_elapsed:.3f}s)")
+    for i, (meta, score) in enumerate(zip(metadatas, scores), 1):
+        print(f"  {i}. {meta['source']} (청크 #{meta['chunk_index']}, 점수: {score:.3f})")
 
     context = build_context(chunks, metadatas)
 
@@ -142,8 +155,10 @@ def run_query(collection, question: str):
     print("=" * 60)
 
 
-def interactive_mode(collection):
-    print("준비 완료. 질문을 입력하세요. (종료: 'exit' 또는 Ctrl+C)\n")
+def interactive_mode(collection, use_hybrid: bool = False):
+    mode_label = "하이브리드 (벡터 70% + BM25 30%)" if use_hybrid else "벡터 100%"
+    print(f"준비 완료. 검색 모드: {mode_label}")
+    print("질문을 입력하세요. (종료: 'exit' 또는 Ctrl+C)\n")
     while True:
         try:
             question = input("질문> ").strip()
@@ -152,7 +167,7 @@ def interactive_mode(collection):
             if question.lower() in ("exit", "quit", "종료"):
                 print("종료합니다.")
                 break
-            run_query(collection, question)
+            run_query(collection, question, use_hybrid=use_hybrid)
             print()
         except KeyboardInterrupt:
             print("\n종료합니다.")
@@ -160,14 +175,25 @@ def interactive_mode(collection):
 
 
 if __name__ == "__main__":
+    import argparse
     import time
+
+    parser = argparse.ArgumentParser(description="TechStar 문서 검색 챗봇")
+    parser.add_argument("question", nargs="*", help="질문 (없으면 대화형 모드)")
+    parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        default=False,
+        help="하이브리드 검색 사용 (벡터 70%% + BM25 30%%, 기본: 벡터 100%%)",
+    )
+    args = parser.parse_args()
+
     print("모델 로딩 중...", end=" ", flush=True)
     t = time.time()
     collection = load_collection()
     print(f"완료 ({time.time() - t:.1f}s)\n")
 
-    if len(sys.argv) > 1:
-        question = " ".join(sys.argv[1:])
-        run_query(collection, question)
+    if args.question:
+        run_query(collection, " ".join(args.question), use_hybrid=args.hybrid)
     else:
-        interactive_mode(collection)
+        interactive_mode(collection, use_hybrid=args.hybrid)

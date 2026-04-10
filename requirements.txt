@@ -1,3 +1,4 @@
 chromadb
 anthropic
 sentence-transformers
+rank-bm25
