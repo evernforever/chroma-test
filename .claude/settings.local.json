@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip show:*)",
+      "Bash(python -m venv venv)",
+      "Bash(venv/Scripts/pip install:*)",
+      "Bash(py -0)",
+      "Bash(c:/Users/anyone/projects/chroma-test/venv/Scripts/python --version)",
+      "Bash(c:/Users/anyone/projects/chroma-test/venv/Scripts/python -c \"import chromadb; print\\(chromadb.__version__\\)\")",
+      "Bash(c:/Users/anyone/projects/chroma-test/venv/Scripts/pip install:*)",
+      "Bash(venv/Scripts/python query.py \"대표이사가 누구야?\")",
+      "Bash(venv/Scripts/python -c ':*)",
+      "Bash(gh auth:*)"
+    ]
+  }
+}
