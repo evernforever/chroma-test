@@ -24,27 +24,27 @@ TOP_K = 3  # 검색할 유사 청크 수
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
 
-def search_documents(query: str, top_k: int = TOP_K):
-    """ChromaDB에서 질문과 가장 유사한 청크를 검색."""
+def load_collection():
+    """임베딩 모델과 ChromaDB 컬렉션을 로드."""
     client = chromadb.PersistentClient(path=CHROMA_PATH)
     ef = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name="nlpai-lab/KURE-v1"
     )
-
     try:
-        collection = client.get_collection(name=COLLECTION_NAME, embedding_function=ef)
+        return client.get_collection(name=COLLECTION_NAME, embedding_function=ef)
     except Exception:
         print("오류: ChromaDB 컬렉션을 찾을 수 없습니다.")
         print("먼저 'python ingest.py'를 실행해 문서를 저장하세요.")
         sys.exit(1)
 
-    results = collection.query(
+
+def search_documents(collection, query: str, top_k: int = TOP_K):
+    """ChromaDB에서 질문과 가장 유사한 청크를 검색."""
+    return collection.query(
         query_texts=[query],
         n_results=top_k,
         include=["documents", "metadatas", "distances"],
     )
-
-    return results
 
 
 def build_context(chunks: list[str], metadatas: list[dict]) -> str:
@@ -80,16 +80,21 @@ def ask_claude(question: str, context: str) -> str:
     return message.content[0].text
 
 
-def run_query(question: str):
+def run_query(collection, question: str):
+    import time
+
     print(f"\n질문: {question}")
     print("\n검색 중...")
 
-    results = search_documents(question)
+    t0 = time.time()
+    results = search_documents(collection, question)
+    search_elapsed = time.time() - t0
+
     chunks = results["documents"][0]
     metadatas = results["metadatas"][0]
     distances = results["distances"][0]
 
-    print(f"\n관련 문서 {len(chunks)}개 발견:")
+    print(f"\n관련 문서 {len(chunks)}개 발견: (ChromaDB 검색 소요시간: {search_elapsed:.3f}s)")
     for i, (meta, dist) in enumerate(zip(metadatas, distances), 1):
         similarity = 1 - dist  # cosine distance → similarity
         print(f"  {i}. {meta['source']} (청크 #{meta['chunk_index']}, 유사도: {similarity:.3f})")
@@ -121,17 +126,19 @@ def run_query(question: str):
     print("\n")
     print("\n")
     print("\nClaude 답변 생성 중...\n")
+    t1 = time.time()
     answer = ask_claude(question, context)
+    claude_elapsed = time.time() - t1
 
     print("=" * 60)
-    print("답변")
+    print(f"답변  (Claude 소요시간: {claude_elapsed:.3f}s)")
     print("=" * 60)
     print(answer)
     print("=" * 60)
 
 
-def interactive_mode():
-    print("대화형 RAG 모드 시작 (종료: 'exit' 또는 Ctrl+C)\n")
+def interactive_mode(collection):
+    print("준비 완료. 질문을 입력하세요. (종료: 'exit' 또는 Ctrl+C)\n")
     while True:
         try:
             question = input("질문> ").strip()
@@ -140,7 +147,7 @@ def interactive_mode():
             if question.lower() in ("exit", "quit", "종료"):
                 print("종료합니다.")
                 break
-            run_query(question)
+            run_query(collection, question)
             print()
         except KeyboardInterrupt:
             print("\n종료합니다.")
@@ -148,8 +155,14 @@ def interactive_mode():
 
 
 if __name__ == "__main__":
+    import time
+    print("모델 로딩 중...", end=" ", flush=True)
+    t = time.time()
+    collection = load_collection()
+    print(f"완료 ({time.time() - t:.1f}s)\n")
+
     if len(sys.argv) > 1:
         question = " ".join(sys.argv[1:])
-        run_query(question)
+        run_query(collection, question)
     else:
-        interactive_mode()
+        interactive_mode(collection)
