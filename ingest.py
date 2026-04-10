@@ -17,33 +17,61 @@ COLLECTION_NAME = "documents"
 CHUNK_SIZE = 400  # 청크당 최대 글자 수
 CHUNK_OVERLAP = 50  # 청크 간 겹치는 글자 수
 
+# Recursive 분할 구분자 우선순위: 문단 → 줄바꿈 → 문장 → 단어
+SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
+
 
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
-    """텍스트를 문단 기준으로 청킹. 청크가 너무 길면 추가 분할."""
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    """Recursive Character 방식 청킹.
+    구분자 우선순위(\n\n → \n → '. ' → ' ' → '')로 재귀 분할하여
+    의미 단위를 최대한 보존하면서 chunk_size 이하로 나눔.
+    """
 
-    chunks = []
-    current = ""
+    def _split(text: str, separators: list[str]) -> list[str]:
+        sep = separators[0]
+        next_seps = separators[1:]
 
-    for para in paragraphs:
-        if len(current) + len(para) + 2 <= chunk_size:
-            current += ("\n\n" if current else "") + para
-        else:
-            if current:
-                chunks.append(current)
-            # 문단 자체가 chunk_size보다 길면 강제 분할
-            if len(para) > chunk_size:
-                for start in range(0, len(para), chunk_size - overlap):
-                    piece = para[start : start + chunk_size]
-                    chunks.append(piece)
-                current = ""
+        # 현재 구분자로 분리
+        parts = text.split(sep) if sep else list(text)
+        parts = [p for p in parts if p.strip()]
+
+        chunks = []
+        current = ""
+
+        for part in parts:
+            candidate = (current + sep + part) if current else part
+
+            if len(candidate) <= chunk_size:
+                current = candidate
             else:
-                current = para
+                if current:
+                    chunks.append(current)
+                # part 자체가 chunk_size 초과 → 더 작은 구분자로 재귀 분할
+                if len(part) > chunk_size and next_seps:
+                    sub_chunks = _split(part, next_seps)
+                    # 오버랩 적용: 이전 청크 끝부분을 다음 청크 앞에 붙임
+                    if chunks and overlap > 0:
+                        tail = chunks[-1][-overlap:]
+                        sub_chunks[0] = tail + sep + sub_chunks[0]
+                    chunks.extend(sub_chunks[:-1])
+                    current = sub_chunks[-1] if sub_chunks else ""
+                else:
+                    current = part
 
-    if current:
-        chunks.append(current)
+        if current:
+            chunks.append(current)
 
-    return chunks
+        # 오버랩 적용
+        if overlap > 0 and len(chunks) > 1:
+            overlapped = [chunks[0]]
+            for i in range(1, len(chunks)):
+                tail = overlapped[-1][-overlap:]
+                overlapped.append(tail + sep + chunks[i] if tail else chunks[i])
+            return overlapped
+
+        return chunks
+
+    return _split(text, SEPARATORS)
 
 
 def ingest_documents():

@@ -56,8 +56,8 @@ def build_context(chunks: list[str], metadatas: list[dict]) -> str:
     return "\n\n---\n\n".join(sections)
 
 
-def ask_claude(question: str, context: str) -> str:
-    """컨텍스트를 포함하여 Claude에게 질문하고 답변 반환."""
+def ask_claude_stream(question: str, context: str):
+    """Claude API 스트리밍으로 토큰 단위 출력."""
     client = anthropic.Anthropic()
 
     prompt = f"""아래는 사내 문서에서 검색된 관련 내용입니다.
@@ -71,13 +71,18 @@ def ask_claude(question: str, context: str) -> str:
 
 질문: {question}"""
 
-    message = client.messages.create(
+    full_answer = []
+    with client.messages.stream(
         model=CLAUDE_MODEL,
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
-    )
+    ) as stream:
+        for text in stream.text_stream:
+            print(text, end="", flush=True)
+            full_answer.append(text)
 
-    return message.content[0].text
+    print()  # 스트리밍 끝나면 줄바꿈
+    return "".join(full_answer)
 
 
 def run_query(collection, question: str):
@@ -125,15 +130,15 @@ def run_query(collection, question: str):
     print(">" * 60)
     print("\n")
     print("\n")
-    print("\nClaude 답변 생성 중...\n")
+    print("=" * 60)
+    print("답변")
+    print("=" * 60)
     t1 = time.time()
-    answer = ask_claude(question, context)
+    ask_claude_stream(question, context)
     claude_elapsed = time.time() - t1
 
     print("=" * 60)
-    print(f"답변  (Claude 소요시간: {claude_elapsed:.3f}s)")
-    print("=" * 60)
-    print(answer)
+    print(f"Claude 소요시간: {claude_elapsed:.3f}s")
     print("=" * 60)
 
 

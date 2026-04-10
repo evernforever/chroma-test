@@ -10,7 +10,8 @@
       "Bash(c:/Users/anyone/projects/chroma-test/venv/Scripts/pip install:*)",
       "Bash(venv/Scripts/python query.py \"대표이사가 누구야?\")",
       "Bash(venv/Scripts/python -c ':*)",
-      "Bash(gh auth:*)"
+      "Bash(gh auth:*)",
+      "Bash(venv/Scripts/python -c \"import streamlit; print\\(streamlit.__version__\\)\")"
     ]
   }
 }

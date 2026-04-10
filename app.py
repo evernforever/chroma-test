@@ -8,6 +8,7 @@ import anthropic
 import chromadb
 from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
+from ingest import CHUNK_SIZE, CHUNK_OVERLAP
 
 load_dotenv()
 
@@ -20,8 +21,32 @@ st.set_page_config(page_title="TechStar 문서 검색 챗봇", page_icon="🤖",
 st.title("🤖 TechStar 문서 검색 챗봇")
 st.caption("사내 문서(회사소개, 제품카탈로그, 직원복지규정)를 기반으로 답변합니다.")
 
+st.markdown("""
+<style>
+[data-testid="stSidebarCollapsedControl"]::after,
+[data-testid="collapsedControl"]::after,
+button[kind="headerNoPadding"]::after {
+    content: "문서현황";
+    font-size: 1.0rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    margin-top: 0px;
+    line-height: 1;
+    color: inherit;
+    position: relative;
+    top: +2px;
+}
+[data-testid="stChatMessage"] {
+    align-items: flex-start !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
-@st.cache_resource
+
+@st.cache_resource(show_spinner=False)
 def get_collection():
     client = chromadb.PersistentClient(path=CHROMA_PATH)
     ef = embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -40,7 +65,7 @@ def search_documents(query: str) -> tuple[list[str], list[dict], list[float]]:
     return results["documents"][0], results["metadatas"][0], results["distances"][0]
 
 
-def ask_claude(question: str, chunks: list[str], metadatas: list[dict]) -> str:
+def ask_claude(question: str, chunks: list[str], metadatas: list[dict]):
     context_sections = []
     for chunk, meta in zip(chunks, metadatas):
         context_sections.append(f"[출처: {meta.get('source', '알 수 없음')}]\n{chunk}")
@@ -58,13 +83,43 @@ def ask_claude(question: str, chunks: list[str], metadatas: list[dict]) -> str:
 질문: {question}"""
 
     client = anthropic.Anthropic()
-    message = client.messages.create(
+    with client.messages.stream(
         model=CLAUDE_MODEL,
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
-    )
-    return message.content[0].text
+    ) as stream:
+        for text in stream.text_stream:
+            yield text
 
+
+# 앱 시작 시 모델 로딩 (최초 1회)
+with st.spinner("모델 로딩 중..."):
+    get_collection()
+st.success("임베딩 모델 로딩 완료 (nlpai-lab/KURE-v1)", icon="✅")
+
+# 사이드바 — 문서 청크 현황
+with st.sidebar:
+    st.header("문서 현황")
+    collection = get_collection()
+    result = collection.get(include=["metadatas", "documents"])
+    from collections import defaultdict
+    chunk_map = defaultdict(list)
+    for doc, meta in zip(result["documents"], result["metadatas"]):
+        chunk_map[meta["source"]].append((meta["chunk_index"], doc))
+    counter = {src: len(chunks) for src, chunks in chunk_map.items()}
+    total = sum(counter.values())
+    st.metric("총 청크 수", total)
+    st.caption("청킹 알고리즘: 고정길이 Recursive")
+    st.caption(f"청크 사이즈: {CHUNK_SIZE}자 / 오버랩: {CHUNK_OVERLAP}자")
+    st.divider()
+    for source in sorted(chunk_map.keys()):
+        count = counter[source]
+        with st.expander(f"📄 {source} ({count}개 청크)"):
+            chunks_sorted = sorted(chunk_map[source], key=lambda x: x[0])
+            for idx, content in chunks_sorted:
+                st.markdown(f"**— 청크 #{idx}**")
+                st.text(content)
+                st.divider()
 
 # 채팅 히스토리 초기화
 if "messages" not in st.session_state:
@@ -77,7 +132,8 @@ for msg in st.session_state.messages:
         if msg["role"] == "assistant" and "sources" in msg:
             with st.expander("참고한 문서 청크 보기"):
                 for src in msg["sources"]:
-                    st.caption(f"📄 {src['source']} (청크 #{src['chunk_index']}, 유사도: {src['similarity']:.3f})")
+                    with st.expander(f"📄 {src['source']} (청크 #{src['chunk_index']}, 유사도: {src['similarity']:.3f})"):
+                        st.text(src["content"])
 
 # 입력창
 if question := st.chat_input("질문을 입력하세요..."):
@@ -96,20 +152,20 @@ if question := st.chat_input("질문을 입력하세요..."):
                         "source": m["source"],
                         "chunk_index": m["chunk_index"],
                         "similarity": 1 - d,
+                        "content": chunk,
                     }
-                    for m, d in zip(metadatas, distances)
+                    for chunk, m, d in zip(chunks, metadatas, distances)
                 ]
             except Exception as e:
                 st.error(f"ChromaDB 오류: {e}\n먼저 ingest.py를 실행하세요.")
                 st.stop()
 
-        with st.spinner("Claude 답변 생성 중..."):
-            answer = ask_claude(question, chunks, metadatas)
+        answer = st.write_stream(ask_claude(question, chunks, metadatas))
 
-        st.markdown(answer)
         with st.expander("참고한 문서 청크 보기"):
             for src in sources:
-                st.caption(f"📄 {src['source']} (청크 #{src['chunk_index']}, 유사도: {src['similarity']:.3f})")
+                with st.expander(f"📄 {src['source']} (청크 #{src['chunk_index']}, 유사도: {src['similarity']:.3f})"):
+                    st.text(src["content"])
 
     # 히스토리 저장
     st.session_state.messages.append({
