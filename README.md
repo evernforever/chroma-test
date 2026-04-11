@@ -28,7 +28,13 @@ pip install -r requirements.txt
 
 ### 2. API 키 설정
 
-프로젝트 루트에 `.env` 파일을 생성하고 Anthropic API 키를 입력합니다.
+`.env.example`을 복사해 `.env` 파일을 만듭니다.
+
+```bash
+cp .env.example .env
+```
+
+`.env` 파일을 열고 아래 값을 채웁니다:
 
 ```
 ANTHROPIC_API_KEY=sk-ant-여기에_실제_키를_입력하세요
@@ -78,6 +84,7 @@ chroma-test/
 ├── chroma_db/            # ChromaDB 벡터 저장소 (자동 생성)
 ├── bm25_index.pkl        # BM25 인덱스 (ingest.py 실행 후 생성)
 ├── requirements.txt
+├── .env.example          # API 키 양식 (git 포함)
 ├── .env                  # API 키 (git 제외)
 └── .gitignore
 ```
