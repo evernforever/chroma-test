@@ -2,3 +2,4 @@ chromadb
 anthropic
 sentence-transformers
 rank-bm25
+streamlit
